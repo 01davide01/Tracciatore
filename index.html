@@ -49,7 +49,7 @@
     const thresholdSelect = document.getElementById('thresholdSelect');
     const colorPreview = document.getElementById('colorPreview');
 
-    let video = null;
+    let video;
     let videoStarted = false;
     let maskActive = false;
     let selectedHSV = null;
@@ -58,178 +58,147 @@
     let thresholdSec = 3;
     let posHistory = [];
     let fermoDa = null;
-    let mirror = true; // specchiamento orizzontale
+    let mirror = false; // default: no specchiamento
     const audio = new Audio('press.wav');
     audio.preload = 'auto';
 
-    // Soglia minima di pixel per evitare flicker
-    const MIN_PIXELS = 1000;
+    const MIN_PIXELS = 1000; // per evitare flicker
 
-    // Popola dropdown 1-10
+    // Popola dropdown da 1 a 10 secondi
     for (let i = 1; i <= 10; i++) {
       const opt = document.createElement('option');
       opt.value = i;
-      opt.text = `${i} s`;
-      if (i === 3) opt.selected = true;
+      opt.textContent = `${i} s`;
+      if (i === thresholdSec) opt.selected = true;
       thresholdSelect.appendChild(opt);
     }
     thresholdSelect.addEventListener('change', () => {
       thresholdSec = parseInt(thresholdSelect.value, 10);
     });
 
-    // Avvia o toggle modalità
+    // Gestione pulsante Avvia/Toggle
     startBtn.addEventListener('click', async () => {
       if (!videoStarted) {
         await startVideo();
         videoStarted = true;
       } else if (selectedHSV) {
         maskActive = !maskActive;
-        if (!maskActive) {
-          selectedHSV = null;
-          lowerHSV = upperHSV = null;
-          colorPreview.style.background = '#000';
-          posHistory = [];
-          fermoDa = null;
-        }
+        if (!maskActive) resetSelection();
       }
     });
 
-    // Seleziona colore al click
-    canvas.addEventListener('click', (e) => {
+    // Click su canvas per selezionare colore
+    canvas.addEventListener('click', ({clientX, clientY}) => {
       if (!videoStarted || maskActive) return;
       const rect = canvas.getBoundingClientRect();
-      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
-      const pixel = ctx.getImageData(x, y, 1, 1).data;
-      selectedHSV = rgbToHsv(pixel[0], pixel[1], pixel[2]);
-      lowerHSV = [clamp(selectedHSV.h - 20, 0, 360), clamp(selectedHSV.s - 50, 0, 100), clamp(selectedHSV.v - 50, 0, 100)];
-      upperHSV = [clamp(selectedHSV.h + 20, 0, 360), clamp(selectedHSV.s + 50, 0, 100), clamp(selectedHSV.v + 50, 0, 100)];
-      const rgbPrev = hsvToRgb(selectedHSV.h, selectedHSV.s, selectedHSV.v);
-      colorPreview.style.background = `rgb(${rgbPrev.r}, ${rgbPrev.g}, ${rgbPrev.b})`;
+      const x = (clientX - rect.left) * (canvas.width / rect.width);
+      const y = (clientY - rect.top) * (canvas.height / rect.height);
+      const p = ctx.getImageData(x, y, 1, 1).data;
+      selectedHSV = rgbToHsv(p[0], p[1], p[2]);
+      lowerHSV = [clamp(selectedHSV.h-20,0,360), clamp(selectedHSV.s-50,0,100), clamp(selectedHSV.v-50,0,100)];
+      upperHSV = [clamp(selectedHSV.h+20,0,360), clamp(selectedHSV.s+50,0,100), clamp(selectedHSV.v+50,0,100)];
+      const prevRgb = hsvToRgb(selectedHSV.h, selectedHSV.s, selectedHSV.v);
+      colorPreview.style.background = `rgb(${prevRgb.r},${prevRgb.g},${prevRgb.b})`;
       maskActive = true;
     });
 
-    // Inizializza la videocamera con alta risoluzione e rileva facingMode
+    // Avvia video con risoluzione HD e detect facingMode
     async function startVideo() {
       video = document.createElement('video');
-      video.setAttribute('autoplay', '');
-      video.setAttribute('playsinline', '');
+      video.autoplay = true;
+      video.playsInline = true;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          }, audio: false
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
         });
-        // Verifica facingMode: se environment, non specchiare; se user, specchia
         const track = stream.getVideoTracks()[0];
         const settings = track.getSettings();
+        // se camera frontale, specchia; altrimenti no
         mirror = settings.facingMode === 'user';
-
         video.srcObject = stream;
         video.addEventListener('loadedmetadata', () => {
           canvas.width = video.videoWidth;
           canvas.height = video.videoHeight;
           requestAnimationFrame(loop);
         });
-      } catch (err) {
+      } catch (e) {
         alert('Impossibile accedere alla videocamera.');
       }
     }
 
     // Loop di rendering e segmentazione
     function loop() {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
       if (mirror) {
-        ctx.save();
-        ctx.translate(canvas.width, 0);
-        ctx.scale(-1, 1);
+        ctx.save(); ctx.translate(canvas.width,0); ctx.scale(-1,1);
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         ctx.restore();
       } else {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       }
-
-      if (maskActive && lowerHSV && upperHSV) {
-        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        let sumX = 0, sumY = 0, count = 0;
-        for (let i = 0; i < frame.data.length; i += 4) {
-          const r = frame.data[i], g = frame.data[i+1], b = frame.data[i+2];
-          const hsv = rgbToHsv(r, g, b);
-          if (inRange(hsv, lowerHSV, upperHSV)) {
-            const idx = i / 4;
-            const x = idx % canvas.width;
-            const y = Math.floor(idx / canvas.width);
-            sumX += x; sumY += y; count++;
-          } else {
-            frame.data[i] = frame.data[i+1] = frame.data[i+2] = 0;
-          }
-        }
-        ctx.putImageData(frame, 0, 0);
-        if (count >= MIN_PIXELS) {
-          const cx = sumX / count;
-          const cy = sumY / count;
-          ctx.beginPath();
-          ctx.arc(cx, cy, 10, 0, 2 * Math.PI);
-          ctx.lineWidth = 4;
-          ctx.strokeStyle = '#fff';
-          ctx.stroke();
-          posHistory.push(cy);
-          if (posHistory.length > 15) posHistory.shift();
-          checkFermo();
-        } else {
-          fermoDa = null;
-          posHistory = [];
-        }
-      }
+      if (maskActive) processFrame();
       requestAnimationFrame(loop);
     }
 
-    // Controlla fermo
-    function checkFermo() {
-      if (posHistory.length < 2) return;
-      const delta = Math.max(...posHistory) - Math.min(...posHistory);
-      if (delta < 5) {
-        if (!fermoDa) fermoDa = Date.now();
-        else if ((Date.now() - fermoDa) / 1000 >= thresholdSec) {
-          audio.play();
-          fermoDa = null;
-          posHistory = [];
-        }
-      } else {
-        fermoDa = null;
+    function processFrame() {
+      const img = ctx.getImageData(0,0,canvas.width,canvas.height);
+      let sumX=0, sumY=0, cnt=0;
+      for (let i=0; i<img.data.length; i+=4) {
+        const r=img.data[i], g=img.data[i+1], b=img.data[i+2];
+        const h = rgbToHsv(r,g,b);
+        if (inRange(h, lowerHSV, upperHSV)) {
+          const idx = i/4, x = idx % canvas.width, y = Math.floor(idx / canvas.width);
+          sumX+=x; sumY+=y; cnt++;
+        } else img.data[i]=img.data[i+1]=img.data[i+2]=0;
       }
+      ctx.putImageData(img,0,0);
+      if (cnt>=MIN_PIXELS) {
+        const cx=sumX/cnt, cy=sumY/cnt;
+        ctx.beginPath(); ctx.arc(cx,cy,10,0,2*Math.PI);
+        ctx.lineWidth=4; ctx.strokeStyle='#fff'; ctx.stroke();
+        posHistory.push(cy); if (posHistory.length>15) posHistory.shift();
+        checkFermo();
+      } else { fermoDa=null; posHistory=[]; }
     }
 
-    // Utility HSV/RGB
-    function rgbToHsv(r, g, b) {
-      r/=255; g/=255; b/=255;
-      const max = Math.max(r,g,b), min = Math.min(r,g,b), d = max-min;
-      let h = 0, s = max? d/max : 0, v = max;
-      if (d) {
-        if (max===r) h = (g-b)/d + (g<b?6:0);
-        else if (max===g) h = (b-r)/d + 2;
-        else h = (r-g)/d + 4;
+    function checkFermo() {
+      if (posHistory.length<2) return;
+      const delta=Math.max(...posHistory)-Math.min(...posHistory);
+      if (delta<5) {
+        if (!fermoDa) fermoDa=Date.now();
+        else if ((Date.now()-fermoDa)/1000>=thresholdSec) { audio.play(); fermoDa=null; posHistory=[]; }
+      } else fermoDa=null;
+    }
+
+    function resetSelection() { selectedHSV=null; lowerHSV=upperHSV=null; colorPreview.style.background='#000'; posHistory=[]; fermoDa=null; }
+
+    function rgbToHsv(r,g,b) {
+      r/=255;g/=255;b/=255; const M=Math.max(r,g,b), m=Math.min(r,g,b), d=M-m;
+      let h=0; if (d) {
+        if (M===r) h=((g-b)/d + (g<b?6:0));
+        else if (M===g) h=(b-r)/d + 2;
+        else h=(r-g)/d + 4;
         h*=60;
       }
-      return {h:Math.round(h), s:Math.round(s*100), v:Math.round(v*100)};
+      return {h:Math.round(h), s:Math.round((M?d/M:0)*100), v:Math.round(M*100)};
     }
-    function hsvToRgb(h, s, v) {
-      s/=100; v/=100;
-      const c = v*s, x = c*(1-Math.abs((h/60)%2-1)), m = v-c;
-      let [r,g,b] = [0,0,0];
+    function hsvToRgb(h,s,v) {
+      s/=100;v/=100;const c=v*s, x=c*(1-Math.abs((h/60)%2-1)), m=v-c;
+      let [r,g,b]=[0,0,0];
       if (h<60) [r,g,b]=[c,x,0];
-      else if (h<120)[r,g,b]=[x,c,0];
-      else if (h<180)[r,g,b]=[0,c,x];
-      else if (h<240)[r,g,b]=[0,x,c];
-      else if (h<300)[r,g,b]=[x,0,c];
+      else if (h<120) [r,g,b]=[x,c,0];
+      else if (h<180) [r,g,b]=[0,c,x];
+      else if (h<240) [r,g,b]=[0,x,c];
+      else if (h<300) [r,g,b]=[x,0,c];
       else [r,g,b]=[c,0,x];
       return {r:Math.round((r+m)*255), g:Math.round((g+m)*255), b:Math.round((b+m)*255)};
     }
     function clamp(v,min,max){return v<min?min:v>max?max:v;}
-    function inRange(hsv, lo, hi){return hsv.h>=lo[0]&&hsv.h<=hi[0]&&hsv.s>=lo[1]&&hsv.s<=hi[1]&&hsv.v>=lo[2]&&hsv.v<=hi[2];}
+    function inRange(h,{h:h1,s:s1,v:v1}, {h:h2,s:s2,v:v2}){return h>=h1&&h<=h2&&s>=s1&&s<=s2&&v>=v1&&v<=v2;}
   })();
   </script>
 </body>
 </html>
+
 
