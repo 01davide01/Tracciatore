@@ -73,25 +73,37 @@
       thresholdSec = parseInt(thresholdSelect.value, 10);
     });
 
+    // Start video / toggle maschera
     startBtn.addEventListener('click', async () => {
       if (!videoStarted) {
         await startVideo();
         videoStarted = true;
-      } else if (selectedHSV) {
+      } else if (selectedHSV !== null) {
         maskActive = !maskActive;
         if (!maskActive) resetSelection();
       }
     });
 
+    // Selezione colore con correzione coordinate specchiamento
     canvas.addEventListener('click', (e) => {
       if (!videoStarted || maskActive) return;
       const rect = canvas.getBoundingClientRect();
-      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
-      const p = ctx.getImageData(x, y, 1, 1).data;
+      const rawX = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const rawY = (e.clientY - rect.top) * (canvas.height / rect.height);
+      const pickX = mirror ? canvas.width - rawX : rawX;
+      const pickY = rawY;
+      const p = ctx.getImageData(Math.round(pickX), Math.round(pickY), 1, 1).data;
       selectedHSV = rgbToHsv(p[0], p[1], p[2]);
-      lowerHSV = [clamp(selectedHSV.h - 20, 0, 360), clamp(selectedHSV.s - 50, 0, 100), clamp(selectedHSV.v - 50, 0, 100)];
-      upperHSV = [clamp(selectedHSV.h + 20, 0, 360), clamp(selectedHSV.s + 50, 0, 100), clamp(selectedHSV.v + 50, 0, 100)];
+      lowerHSV = [
+        clamp(selectedHSV.h - 20, 0, 360),
+        clamp(selectedHSV.s - 50, 0, 100),
+        clamp(selectedHSV.v - 50, 0, 100)
+      ];
+      upperHSV = [
+        clamp(selectedHSV.h + 20, 0, 360),
+        clamp(selectedHSV.s + 50, 0, 100),
+        clamp(selectedHSV.v + 50, 0, 100)
+      ];
       const prevRgb = hsvToRgb(selectedHSV.h, selectedHSV.s, selectedHSV.v);
       colorPreview.style.background = `rgb(${prevRgb.r},${prevRgb.g},${prevRgb.b})`;
       maskActive = true;
@@ -154,12 +166,10 @@
         const cy = sumY / cnt;
         ctx.beginPath(); ctx.arc(cx, cy, 10, 0, 2 * Math.PI);
         ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.stroke();
-        posHistory.push(cy);
-        if (posHistory.length > 15) posHistory.shift();
+        posHistory.push(cy); if (posHistory.length > 15) posHistory.shift();
         checkFermo();
       } else {
-        fermoDa = null;
-        posHistory = [];
+        fermoDa = null; posHistory = [];
       }
     }
 
@@ -168,20 +178,13 @@
       const delta = Math.max(...posHistory) - Math.min(...posHistory);
       if (delta < 5) {
         if (!fermoDa) fermoDa = Date.now();
-        else if ((Date.now() - fermoDa) / 1000 >= thresholdSec) {
-          audio.play(); fermoDa = null; posHistory = [];
-        }
-      } else {
-        fermoDa = null;
-      }
+        else if ((Date.now() - fermoDa) / 1000 >= thresholdSec) { audio.play(); fermoDa = null; posHistory = []; }
+      } else fermoDa = null;
     }
 
     function resetSelection() {
-      selectedHSV = null;
-      lowerHSV = upperHSV = null;
-      colorPreview.style.background = '#000';
-      posHistory = [];
-      fermoDa = null;
+      selectedHSV = null; lowerHSV = upperHSV = null;
+      colorPreview.style.background = '#000'; posHistory = []; fermoDa = null;
     }
 
     function rgbToHsv(r, g, b) {
@@ -195,17 +198,13 @@
         else h = (r - g) / d + 4;
         h *= 60;
       }
-      const s = max ? (d / max) : 0;
-      const v = max;
-      return { h: Math.round(h), s: Math.round(s * 100), v: Math.round(v * 100) };
+      return { h: Math.round(h), s: Math.round((max ? d / max : 0) * 100), v: Math.round(max * 100) };
     }
 
     function hsvToRgb(h, s, v) {
-      s /= 100; v /= 100;
-      const c = v * s;
-      const x = c * (1 - Math.abs((h / 60) % 2 - 1));
-      const m = v - c;
-      let [r, g, b] = [0, 0, 0];
+      s /= 100; v /= 100; const c = v * s;
+      const x = c * (1 - Math.abs((h / 60) % 2 - 1)); const m = v - c;
+      let r=0, g=0, b=0;
       if (h < 60) [r, g, b] = [c, x, 0];
       else if (h < 120) [r, g, b] = [x, c, 0];
       else if (h < 180) [r, g, b] = [0, c, x];
@@ -216,7 +215,6 @@
     }
 
     function clamp(v, min, max) { return v < min ? min : v > max ? max : v; }
-
     function inRange(hsv, lower, upper) {
       return hsv.h >= lower[0] && hsv.h <= upper[0]
           && hsv.s >= lower[1] && hsv.s <= upper[1]
@@ -226,6 +224,7 @@
   </script>
 </body>
 </html>
+
 
 
 
