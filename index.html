@@ -1,29 +1,15 @@
-<!DOCTYPE html><html lang="it">
+<!DOCTYPE html>
+<html lang="it">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Tracciatore Colore</title>
   <style>
-    body, html { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; }
-    #canvas { display:block; width:100%; height:auto; position:relative; z-index:1; }
-    #canvas.disabled { pointer-events: none; }
-    #controls {
-      position:absolute; top:10px; left:10px; right:10px;
-      display:flex; justify-content:space-between; z-index:10;
-      pointer-events: all;
-    }
-    button, select {
-      padding:10px; font-size:16px;
-      background:rgba(255,255,255,0.9);
-      border:none; border-radius:8px;
-      touch-action:manipulation;
-    }
-    #colorPreview {
-      position:absolute; bottom:10px; left:10px;
-      width:50px; height:50px;
-      border:2px solid #fff; border-radius:4px;
-      background:#000; z-index:10;
-    }
+    body,html{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden}
+    #canvas{display:block;width:100%;height:auto;position:relative;z-index:1}
+    #controls{position:absolute;top:10px;left:10px;right:10px;display:flex;justify-content:space-between;z-index:10;pointer-events:all}
+    button,select{padding:10px;font-size:16px;background:rgba(255,255,255,0.9);border:none;border-radius:8px;touch-action:manipulation}
+    #colorPreview{position:absolute;bottom:10px;left:10px;width:50px;height:50px;border:2px solid #fff;border-radius:4px;background:#000;z-index:10}
   </style>
 </head>
 <body>
@@ -32,187 +18,182 @@
     <button id="btn">Avvia Video</button>
     <select id="sel"></select>
   </div>
-  <div id="colorPreview"></div>  <script>
-  (function(){
-    const canvas = document.getElementById('canvas'),
-          ctx    = canvas.getContext('2d'),
-          btn    = document.getElementById('btn'),
-          sel    = document.getElementById('sel'),
-          preview= document.getElementById('colorPreview'),
-          audio  = new Audio('press.wav');
-    audio.preload = 'auto';
+  <div id="colorPreview"></div>
 
-    let video, started = false, maskOn = false,
-        hsvSel = null, lower = null, upper = null,
-        history = [], stillStart = null;
+  <script>
+  (()=>{
+    const canvas    = document.getElementById('canvas'),
+          ctx       = canvas.getContext('2d'),
+          btn       = document.getElementById('btn'),
+          sel       = document.getElementById('sel'),
+          preview   = document.getElementById('colorPreview'),
+          audio     = new Audio('press.wav'),
+          offscreen = document.createElement('canvas'),
+          offCtx    = offscreen.getContext('2d');
+
+    audio.preload='auto';
+
+    let video,
+        started   = false,
+        maskOn    = false,
+        hsvSel    = null,
+        lower, upper,
+        history   = [],
+        stillStart= null;
 
     const MOV_TOL = 20,
           OPEN_R  = 2,
           HSV_R   = {h:5,s:20,v:20};
 
-    // Popola il dropdown dei secondi
-    for(let i=1; i<=10; i++){
-      const o = document.createElement('option');
-      o.value = i;
-      o.textContent = `${i}s`;
-      if(i===3) o.selected = true;
+    // popola dropdown secondi
+    for(let i=1;i<=10;i++){
+      const o=document.createElement('option');
+      o.value=i; o.textContent=`${i}s`;
+      if(i===3) o.selected=true;
       sel.append(o);
     }
 
-    // Bottone Avvia/Reset
-    btn.onclick = async () => {
+    // Start/reset
+    btn.onclick = async ()=>{
       if(!started){
         await startCam();
-        started = true;
-        btn.textContent = 'Reset';
+        started=true;
+        btn.textContent='Reset';
       } else {
         resetAll();
       }
     };
 
-    // Selezione colore: solo se maschera non attiva
-    canvas.onclick = e => {
+    // selezione colore
+    canvas.onclick = e=>{
       if(!started || maskOn) return;
-      const r = canvas.getBoundingClientRect();
-      const x = ((e.clientX - r.left) * canvas.width / r.width) | 0;
-      const y = ((e.clientY - r.top)  * canvas.height / r.height) | 0;
-      const px = mirror ? canvas.width - x : x;
-      const py = y;
-      const d = ctx.getImageData(px,py,1,1).data;
-      hsvSel = rgbToHsv(d[0],d[1],d[2]);
-      lower = [
-        clamp(hsvSel.h - HSV_R.h, 0, 360),
-        clamp(hsvSel.s - HSV_R.s, 0, 100),
-        clamp(hsvSel.v - HSV_R.v, 0, 100)
+      const r=canvas.getBoundingClientRect(),
+            x=((e.clientX-r.left)*canvas.width/r.width)|0,
+            y=((e.clientY-r.top )*canvas.height/r.height)|0,
+            px=mirror?canvas.width-x:x,
+            py=y;
+      const d=ctx.getImageData(px,py,1,1).data;
+      hsvSel=rgbToHsv(d[0],d[1],d[2]);
+      lower=[
+        clamp(hsvSel.h-HSV_R.h,0,360),
+        clamp(hsvSel.s-HSV_R.s,0,100),
+        clamp(hsvSel.v-HSV_R.v,0,100)
       ];
-      upper = [
-        clamp(hsvSel.h + HSV_R.h, 0, 360),
-        clamp(hsvSel.s + HSV_R.s, 0, 100),
-        clamp(hsvSel.v + HSV_R.v, 0, 100)
+      upper=[
+        clamp(hsvSel.h+HSV_R.h,0,360),
+        clamp(hsvSel.s+HSV_R.s,0,100),
+        clamp(hsvSel.v+HSV_R.v,0,100)
       ];
-      const c = hsvToRgb(hsvSel.h, hsvSel.s, hsvSel.v);
-      preview.style.background = `rgb(${c.r},${c.g},${c.b})`;
-      maskOn = true;
+      const c=hsvToRgb(hsvSel.h,hsvSel.s,hsvSel.v);
+      preview.style.background=`rgb(${c.r},${c.g},${c.b})`;
+      maskOn=true;
       canvas.classList.add('disabled');
-      // Unlock audio on mobile
-      audio.play().catch(()=>{});
-      audio.pause(); audio.currentTime = 0;
+      audio.play().catch(()=>{}); audio.pause(); audio.currentTime=0;
     };
 
-    let mirror = false;
+    let mirror=false;
     async function startCam(){
-      video = document.createElement('video');
-      video.autoplay = true;
-      video.playsInline = true;
-      const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode:'environment', width:1280, height:720 },
-        audio: false
+      video=document.createElement('video');
+      video.autoplay=true; video.playsInline=true;
+      const s=await navigator.mediaDevices.getUserMedia({
+        video:{facingMode:'environment',width:1280,height:720},audio:false
       });
-      mirror = s.getVideoTracks()[0].getSettings().facingMode === 'user';
-      video.srcObject = s;
-      video.onloadedmetadata = () => {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+      mirror=s.getVideoTracks()[0].getSettings().facingMode==='user';
+      video.srcObject=s;
+      video.onloadedmetadata=()=>{
+        canvas.width=video.videoWidth;
+        canvas.height=video.videoHeight;
+        offscreen.width=canvas.width;
+        offscreen.height=canvas.height;
         requestAnimationFrame(loop);
       };
     }
 
     function loop(){
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      // Disegna sempre il video in background
-      if(mirror){
-        ctx.save();
-        ctx.translate(canvas.width, 0);
-        ctx.scale(-1, 1);
-        ctx.drawImage(video, 0, 0);
-        ctx.restore();
-      } else {
-        ctx.drawImage(video, 0, 0);
-      }
-      // Se maschera attiva, applica il mask sulla cornice appena disegnata
-      if(maskOn){
-        track();
-      }
-      requestAnimationFrame(loop);
-    };
-          stillStart = null; history = [];
+      if(!maskOn){
+        // disegno video nel canvas principale
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+        if(mirror){
+          ctx.save();ctx.translate(canvas.width,0);ctx.scale(-1,1);
+          ctx.drawImage(video,0,0);ctx.restore();
+        } else {
+          ctx.drawImage(video,0,0);
         }
       } else {
-        stillStart = null;
+        // disegno maschera sul canvas
+        applyMask();
       }
+      requestAnimationFrame(loop);
+    }
+
+    function applyMask(){
+      const w=canvas.width, h=canvas.height;
+      // disegno corrente video offscreen
+      offCtx.clearRect(0,0,w,h);
+      if(mirror){
+        offCtx.save();offCtx.translate(w,0);offCtx.scale(-1,1);
+        offCtx.drawImage(video,0,0);offCtx.restore();
+      } else {
+        offCtx.drawImage(video,0,0);
+      }
+      const img = offCtx.getImageData(0,0,w,h),
+            mask=new Uint8Array(w*h);
+      for(let i=0;i<img.data.length;i+=4){
+        const hsv=rgbToHsv(img.data[i],img.data[i+1],img.data[i+2]);
+        mask[i/4]=inRange(hsv,lower,upper)?1:0;
+      }
+      // disegno maschera: inizio nero
+      ctx.fillStyle='black';
+      ctx.fillRect(0,0,w,h);
+      // se trovo pixel, li copio dal buffer
+      const total=mask.reduce((s,v)=>s+v,0);
+      if(total>0){
+        let sumX=0,sumY=0,cnt=0;
+        for(let i=0;i<w*h;i++){
+          if(mask[i]){
+            const x=i%w,y=(i/w)|0;
+            sumX+=x; sumY+=y; cnt++;
+            const p=i*4;
+            const r=img.data[p],g=img.data[p+1],b=img.data[p+2];
+            const idx=(y*w + x)*4;
+            ctx.fillStyle=`rgb(${r},${g},${b})`;
+            ctx.fillRect(x,y,1,1);
+          }
+        }
+        // cerchio e fermo
+        const cx=sumX/cnt, cy=sumY/cnt;
+        ctx.beginPath();ctx.arc(cx,cy,10,0,2*Math.PI);
+        ctx.lineWidth=4;ctx.strokeStyle='#fff';ctx.stroke();
+        history.push(cy); if(history.length>15)history.shift();
+        checkStill();
+      }
+    }
+
+    function checkStill(){
+      const thresh=parseInt(sel.value,10)*1000;
+      const d=Math.max(...history)-Math.min(...history);
+      if(d<=MOV_TOL){
+        if(!stillStart) stillStart=Date.now();
+        else if(Date.now()-stillStart>=thresh){
+          audio.play().catch(()=>{});
+          stillStart=null; history=[];
+        }
+      } else stillStart=null;
     }
 
     function resetAll(){
-      maskOn = false;
-      hsvSel = null; lower = upper = null;
-      history = []; stillStart = null;
-      preview.style.background = '#000';
+      maskOn=false; hsvSel=null; history=[]; stillStart=null;
+      preview.style.background='#000';
       canvas.classList.remove('disabled');
-      btn.textContent = 'Avvia Video';
+      btn.textContent='Avvia Video';
     }
 
-    // --- Helper Functions ---
-    function opening(m,w,h,r){
-      const tmp=new Uint8Array(m), res=new Uint8Array(m.length);
-      for(let y=r; y<h-r; y++) for(let x=r; x<w-r; x++){
-        const i=y*w+x; let ok=true;
-        for(let dy=-r; dy<=r&&ok; dy++) for(let dx=-r; dx<=r; dx++){
-          if(!m[(y+dy)*w+(x+dx)]) ok=false;
-        }
-        tmp[i] = ok ? 1 : 0;
-      }
-      for(let y=r; y<h-r; y++) for(let x=r; x<w-r; x++){
-        const i=y*w+x; let ok=false;
-        for(let dy=-r; dy<=r&&!ok; dy++) for(let dx=-r; dx<=r; dx++){
-          if(tmp[(y+dy)*w+(x+dx)]) ok=true;
-        }
-        res[i] = ok ? 1 : 0;
-      }
-      return res;
-    }
-    function labelCC(m,w,h){
-      const labels=new Int32Array(m.length), sizes={}, q=[];
-      let lbl=0;
-      for(let i=0; i<m.length; i++) if(m[i] && labels[i]===0){
-        lbl++; sizes[lbl]=0; labels[i]=lbl; q.push(i);
-        while(q.length){
-          const v=q.pop(); sizes[lbl]++;
-          const x=v%w, y=(v/w)|0;
-          [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy])=>{
-            const nx=x+dx, ny=y+dy, ni=ny*w+nx;
-            if(nx>=0&&nx<w&&ny>=0&&ny<h && m[ni] && labels[ni]===0){
-              labels[ni]=lbl; q.push(ni);
-            }
-          });
-        }
-      }
-      return {labels, sizes};
-    }
-    function rgbToHsv(r,g,b){ r/=255;g/=255;b/=255; const M=Math.max(r,g,b), m=Math.min(r,g,b), d=M-m; let h=0;
-      if(d){ if(M===r) h=((g-b)/d + (g<b?6:0));
-            else if(M===g) h=(b-r)/d + 2;
-            else h=(r-g)/d + 4;
-            h *= 60;
-      }
-      return {h:Math.round(h), s:Math.round((M?d/M:0)*100), v:Math.round(M*100)};
-    }
-    function hsvToRgb(h,s,v){ s/=100; v/=100;
-      const c=v*s, x=c*(1-Math.abs((h/60)%2-1)), m=v-c;
-      let r=0,g=0,b=0;
-      if(h<60) [r,g,b]=[c,x,0];
-      else if(h<120) [r,g,b]=[x,c,0];
-      else if(h<180) [r,g,b]=[0,c,x];
-      else if(h<240) [r,g,b]=[0,x,c];
-      else if(h<300) [r,g,b]=[x,0,c];
-      else [r,g,b]=[c,0,x];
-      return {r:Math.round((r+m)*255), g:Math.round((g+m)*255), b:Math.round((b+m)*255)};
-    }
-    function inRange(h,lo,hi){
-      return h.h>=lo[0]&&h.h<=hi[0]&&
-             h.s>=lo[1]&&h.s<=hi[1]&&
-             h.v>=lo[2]&&h.v<=hi[2];
-    }
-    function clamp(v,mi,ma){ return v<mi?mi:v>ma?ma:v; }
+    // --- UTIL ---
+    function rgbToHsv(r,g,b){r/=255;g/=255;b/=255;const M=Math.max(r,g,b),m=Math.min(r,g,b),d=M-m;let h=0;if(d){if(M===r)h=((g-b)/d+(g<b?6:0));else if(M===g)h=(b-r)/d+2;else h=(r-g)/d+4;h*=60;}return{h:Math.round(h),s:Math.round((M?d/M:0)*100),v:Math.round(M*100)};}
+    function hsvToRgb(h,s,v){s/=100;v/=100;const c=v*s,x=c*(1-Math.abs((h/60)%2-1)),m=v-c;let r=0,g=0,b=0;if(h<60)[r,g,b]=[c,x,0];else if(h<120)[r,g,b]=[x,c,0];else if(h<180)[r,g,b]=[0,c,x];else if(h<240)[r,g,b]=[0,x,c];else if(h<300)[r,g,b]=[x,0,c];else[r,g,b]=[c,0,x];return{r:Math.round((r+m)*255),g:Math.round((g+m)*255),b:Math.round((b+m)*255)};}
+    function inRange(h,lo,hi){return h.h>=lo[0]&&h.h<=hi[0]&&h.s>=lo[1]&&h.s<=hi[1]&&h.v>=lo[2]&&h.v<=hi[2];}
+    function clamp(v,mi,ma){return v<mi?mi:v>ma?ma:v;}
   })();
-  </script></body>
+  </script>
+</body>
 </html>
