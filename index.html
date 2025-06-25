@@ -118,62 +118,23 @@
     }
 
     function loop(){
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      if(!maskOn){
-        if(mirror){
-          ctx.save(); ctx.translate(canvas.width,0); ctx.scale(-1,1);
-          ctx.drawImage(video,0,0); ctx.restore();
-        } else {
-          ctx.drawImage(video,0,0);
-        }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // Disegna sempre il video in background
+      if(mirror){
+        ctx.save();
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, 0, 0);
+        ctx.restore();
       } else {
+        ctx.drawImage(video, 0, 0);
+      }
+      // Se maschera attiva, applica il mask sulla cornice appena disegnata
+      if(maskOn){
         track();
       }
       requestAnimationFrame(loop);
-    }
-
-    function track(){
-      const w = canvas.width, h = canvas.height;
-      const img = ctx.getImageData(0,0,w,h);
-      const mask = new Uint8Array(w*h);
-      for(let i=0; i<img.data.length; i+=4){
-        const hsv = rgbToHsv(img.data[i], img.data[i+1], img.data[i+2]);
-        mask[i/4] = inRange(hsv, lower, upper) ? 1 : 0;
-      }
-      // Se nessun pixel rilevato, mantieni maschera nera
-      const total = mask.reduce((s,v)=>s+v,0);
-      if(total === 0){
-        ctx.fillStyle = 'black';
-        ctx.fillRect(0,0,w,h);
-        return;
-      }
-      const op = opening(mask, w, h, OPEN_R);
-      const {labels, sizes} = labelCC(op, w, h);
-      // Trova il blob più grande
-      let bigL = 0, bigSz = 0;
-      for(const l in sizes) if(sizes[l] > bigSz){ bigSz = sizes[l]; bigL = +l; }
-      // Disegna solo il blob più grande
-      let sumX=0, sumY=0, cnt=0;
-      for(let i=0; i<labels.length; i++){
-        const i4 = i*4;
-        if(labels[i] === bigL){ const x=i%w, y=(i/w)|0; sumX+=x; sumY+=y; cnt++; }
-        else { img.data[i4]=img.data[i4+1]=img.data[i4+2]=0; }
-      }
-      ctx.putImageData(img, 0, 0);
-      const cx = sumX/cnt, cy = sumY/cnt;
-      ctx.beginPath(); ctx.arc(cx,cy,10,0,2*Math.PI);
-      ctx.lineWidth=4; ctx.strokeStyle='#fff'; ctx.stroke();
-      history.push(cy); if(history.length>15) history.shift();
-      checkStill();
-    }
-
-    function checkStill(){
-      const thresh = parseInt(sel.value,10)*1000;
-      const d = Math.max(...history) - Math.min(...history);
-      if(d <= MOV_TOL){
-        if(!stillStart) stillStart = Date.now();
-        else if(Date.now() - stillStart >= thresh){
-          audio.play().catch(()=>{});
+    };
           stillStart = null; history = [];
         }
       } else {
