@@ -1,168 +1,268 @@
-<!DOCTYPE html><html lang="it">
+<!DOCTYPE html>
+<html lang="it">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Tracciatore Colore</title>
   <style>
-    body, html { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
-    .wrapper { position: relative; width: 100%; height: 100%; }
-    canvas { width: 100%; height: auto; display: block; }
-    #controls { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; justify-content: space-between; z-index: 2; }
-    button, select { padding: 10px; font-size: 16px; background: rgba(255,255,255,0.8); border: none; border-radius: 8px; }
-    #colorPreview { position: absolute; bottom: 10px; left: 10px; width: 50px; height: 50px; border: 2px solid #fff; border-radius: 4px; background: #000; z-index: 2; }
+    body, html { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; }
+    #canvas { display:block; width:100%; height:auto; }
+    #controls {
+      position:absolute; top:10px; left:10px; right:10px;
+      display:flex; justify-content:space-between; z-index:2;
+    }
+    button, select {
+      padding:10px; font-size:16px;
+      background:rgba(255,255,255,0.8);
+      border:none; border-radius:8px;
+      touch-action:manipulation;
+    }
+    #colorPreview {
+      position:absolute; bottom:10px; left:10px;
+      width:50px; height:50px;
+      border:2px solid #fff; border-radius:4px;
+      background:#000; z-index:2;
+    }
   </style>
 </head>
 <body>
-  <div class="wrapper">
-    <canvas id="canvas"></canvas>
-    <div id="controls">
-      <button id="toggleBtn">Avvia Video</button>
-      <select id="thresholdSelect"></select>
-    </div>
-    <div id="colorPreview"></div>
+  <canvas id="canvas"></canvas>
+  <div id="controls">
+    <button id="btn">Avvia Video</button>
+    <select id="sel"></select>
   </div>
+  <div id="colorPreview"></div>
+
   <script>
-  (() => {
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const toggleBtn = document.getElementById('toggleBtn');
-    const thresholdSelect = document.getElementById('thresholdSelect');
-    const colorPreview = document.getElementById('colorPreview');let video, videoStarted = false;
-let selectedHSV = null;
-let lowerHSV, upperHSV;
-let maskActive = false;
+  (()=>{
+    const canvas = document.getElementById('canvas'),
+          ctx    = canvas.getContext('2d'),
+          btn    = document.getElementById('btn'),
+          sel    = document.getElementById('sel'),
+          preview= document.getElementById('colorPreview'),
+          audio  = new Audio('press.wav');
+    audio.preload='auto';
 
-let posHistory = [];
-let fermoDa = null;
-let underCount = 0;
-let initialSize = null;
+    let video, started=false, maskOn=false,
+        hsvSel=null, lower, upper,
+        history=[], stillStart=null, under=0, initSize=null;
 
-const audio = new Audio('press.wav'); audio.preload = 'auto';
+    // costanti
+    const MIN_PIX=500,
+          MOVTOL=20,
+          OPENR=2,
+          HSVR={h:5,s:20,v:20},
+          MAXUNDER=5;
 
-const MIN_PIXELS = 500;
-const MOV_TOL = 20;
-const OPEN_RADIUS = 2;
-const HSV_RANGE = { h:5, s:20, v:20 };
-const MAX_UNDER = 5;
-const MOVEMENT_TIME = () => parseInt(thresholdSelect.value, 10) * 1000;
-
-// prefill seconds dropdown
-for(let i=1;i<=10;i++){
-  const o=document.createElement('option'); o.value=i; o.textContent=`${i}s`;
-  thresholdSelect.append(o);
-}
-
-toggleBtn.onclick = async () => {
-  if(!videoStarted){
-    await startCamera();
-    videoStarted = true;
-    toggleBtn.textContent = 'Reimposta';
-  } else {
-    // if mask active, reset; else ignore
-    resetAll();
-  }
-};
-
-canvas.onclick = e => {
-  if(!videoStarted) return;
-  const r = canvas.getBoundingClientRect();
-  const x = ((e.clientX-r.left) * canvas.width / r.width) | 0;
-  const y = ((e.clientY-r.top) * canvas.height / r.height) | 0;
-  const px = mirror? canvas.width - x : x;
-  const py = y;
-  const d = ctx.getImageData(px,py,1,1).data;
-  selectedHSV = rgbToHsv(d[0],d[1],d[2]);
-  lowerHSV = [clamp(selectedHSV.h-HSV_RANGE.h,0,360), clamp(selectedHSV.s-HSV_RANGE.s,0,100), clamp(selectedHSV.v-HSV_RANGE.v,0,100)];
-  upperHSV = [clamp(selectedHSV.h+HSV_RANGE.h,0,360), clamp(selectedHSV.s+HSV_RANGE.s,0,100), clamp(selectedHSV.v+HSV_RANGE.v,0,100)];
-  colorPreview.style.background = `rgb(${hsvToRgb(...Object.values(selectedHSV)).r},${hsvToRgb(...Object.values(selectedHSV)).g},${hsvToRgb(...Object.values(selectedHSV)).b})`;
-  maskActive = true;
-  underCount = 0;
-  initialSize = null;
-};
-
-let mirror = false;
-async function startCamera(){
-  video = document.createElement('video'); video.autoplay = true; video.playsInline = true;
-  const s = await navigator.mediaDevices.getUserMedia({ video:{facingMode:'environment',width:1280,height:720}, audio:false });
-  mirror = s.getVideoTracks()[0].getSettings().facingMode === 'user';
-  video.srcObject = s;
-  video.onloadedmetadata = () => {
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    requestAnimationFrame(drawLoop);
-  };
-}
-
-function drawLoop(){
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  if(mirror){ ctx.save(); ctx.translate(canvas.width,0); ctx.scale(-1,1); ctx.drawImage(video,0,0); ctx.restore(); }
-  else ctx.drawImage(video,0,0);
-  if(maskActive) trackColor();
-  requestAnimationFrame(drawLoop);
-}
-
-function trackColor(){
-  const w=canvas.width, h=canvas.height;
-  const img=ctx.getImageData(0,0,w,h);
-  const mask=new Uint8Array(w*h);
-  for(let i=0;i<img.data.length;i+=4){
-    const hsv=rgbToHsv(img.data[i],img.data[i+1],img.data[i+2]);
-    mask[i/4]=inRange(hsv,lowerHSV,upperHSV)?1:0;
-  }
-  const opened = opening(mask,w,h,OPEN_RADIUS);
-  const {labels,sizes} = labelComponents(opened,w,h);
-  let maxL=0,maxSz=0;
-  Object.entries(sizes).forEach(([l,sz])=>{ if(sz>maxSz){maxSz=sz;maxL=l;} });
-  if(initialSize===null) initialSize=maxSz;
-  const dynMin = Math.max(MIN_PIXELS, initialSize*0.2);
-  if(maxSz<dynMin){ underCount++; if(underCount>=MAX_UNDER) resetSelection(); return; } else underCount=0;
-  const blobMask = new Uint8Array(w*h);
-  let sumX=0,sumY=0,cnt=0;
-  for(let i=0;i<labels.length;i++){
-    if(labels[i]==maxL){ blobMask[i]=1; sumX+=i%w; sumY+=Math.floor(i/w); cnt++; } else img.data[i*4]=img.data[i*4+1]=img.data[i*4+2]=0;
-  }
-  ctx.putImageData(img,0,0);
-  const cx=sumX/cnt, cy=sumY/cnt;
-  // draw centroid circle
-  ctx.beginPath(); ctx.arc(cx,cy,10,0,2*Math.PI);
-  ctx.lineWidth=4; ctx.strokeStyle='#fff'; ctx.stroke();
-  posHistory.push(cy); if(posHistory.length>15) posHistory.shift();
-  checkStill();
-}
-
-function checkStill(){
-  const d = Math.max(...posHistory)-Math.min(...posHistory);
-  if(d<=MOV_TOL){ if(!fermoDa) fermoDa=Date.now(); else if(Date.now()-fermoDa>=MOVEMENT_TIME()){ audio.play(); fermoDa=null; posHistory=[]; } }
-  else fermoDa=null;
-}
-
-function resetSelection(){ maskActive=false; selectedHSV=null; lowerHSV=upperHSV=null; posHistory=[]; fermoDa=null; underCount=0; initialSize=null; colorPreview.style.background='#000'; }
-
-// util
-function opening(mask,w,h,r){ const tmp=new Uint8Array(mask), res=new Uint8Array(mask.length);
-  for(let y=r;y<h-r;y++)for(let x=r;x<w-r;x++){ const i=y*w+x; let ok=true; for(let dy=-r;dy<=r&&ok;dy++)for(let dx=-r;dx<=r;dx++)if(!mask[(y+dy)*w+(x+dx)])ok=false; tmp[i]=ok?1:0; }
-  for(let y=r;y<h-r;y++)for(let x=r;x<w-r;x++){ const i=y*w+x; let ok=false; for(let dy=-r;dy<=r&&!ok;dy++)for(let dx=-r;dx<=r;dx++)if(tmp[(y+dy)*w+(x+dx)])ok=true; res[i]=ok?1:0; }
-  return res;
-}
-function labelComponents(mask,w,h){ const labels=new Int32Array(mask.length), sizes={}; let lbl=0;
-  for(let i=0;i<mask.length;i++) if(mask[i]&&labels[i]===0){ lbl++; sizes[lbl]=0; const q=[i]; labels[i]=lbl;
-    while(q.length){ const v=q.pop(); sizes[lbl]++; const x=v%w,y=Math.floor(v/w);
-      [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy])=>{ const nx=x+dx,ny=y+dy, ni=ny*w+nx;
-        if(nx>=0&&nx<w&&ny>=0&&ny<h&&mask[ni]&&labels[ni]===0){ labels[ni]=lbl; q.push(ni);} });
+    // popolo dropdown
+    for(let i=1;i<=10;i++){
+      const o=document.createElement('option');
+      o.value=i; o.textContent=`${i}s`;
+      if(i===3) o.selected=true; // default 3s
+      sel.append(o);
     }
-  }
-  return {labels,sizes};
-}
-function rgbToHsv(r,g,b){ r/=255;g/=255;b/=255; const M=Math.max(r,g,b), m=Math.min(r,g,b), d=M-m; let h=0;
-  if(d){ if(M===r)h=((g-b)/d+(g<b?6:0)); else if(M===g)h=(b-r)/d+2; else h=(r-g)/d+4; h*=60; }
-  return {h:Math.round(h), s:Math.round((M?d/M:0)*100), v:Math.round(M*100)}; }
-function hsvToRgb(h,s,v){ s/=100;v/=100; const c=v*s,x=c*(1-Math.abs((h/60)%2-1)),m=v-c; let r=0,g=0,b=0;
-  if(h<60)[r,g,b]=[c,x,0];else if(h<120)[r,g,b]=[x,c,0];else if(h<180)[r,g,b]=[0,c,x];else if(h<240)[r,g,b]=[0,x,c];else if(h<300)[r,g,b]=[x,0,c];else[r,g,b]=[c,0,x];
-  return {r:Math.round((r+m)*255), g:Math.round((g+m)*255), b:Math.round((b+m)*255)}; }
-function clamp(v,min,max){ return v<min?min:v>max?max:v; }
-function inRange(hsv,lo,hi){ return hsv.h>=lo[0]&&hsv.h<=hi[0]&&hsv.s>=lo[1]&&hsv.s<=hi[1]&&hsv.v>=lo[2]&&hsv.v<=hi[2]; }
 
-})(); </script>
+    btn.onclick = async ()=>{
+      if(!started){
+        await startCam();
+        started=true;
+        btn.textContent='Reset';
+      } else {
+        resetAll();
+      }
+    };
 
+    canvas.onclick = e=>{
+      if(!started) return;
+      const r=canvas.getBoundingClientRect(),
+            x = ((e.clientX-r.left)*canvas.width/r.width)|0,
+            y = ((e.clientY-r.top )*canvas.height/r.height)|0,
+            px=mirror?canvas.width-x:x,
+            py=y,
+            d = ctx.getImageData(px,py,1,1).data;
+      hsvSel=rgbToHsv(d[0],d[1],d[2]);
+      lower=[clamp(hsvSel.h-HSVR.h,0,360),
+             clamp(hsvSel.s-HSVR.s,0,100),
+             clamp(hsvSel.v-HSVR.v,0,100)];
+      upper=[clamp(hsvSel.h+HSVR.h,0,360),
+             clamp(hsvSel.s+HSVR.s,0,100),
+             clamp(hsvSel.v+HSVR.v,0,100)];
+      const {r:rr,g:gg,b:bb}=hsvToRgb(hsvSel.h,hsvSel.s,hsvSel.v);
+      preview.style.background=`rgb(${rr},${gg},${bb})`;
+      maskOn=true; under=0; initSize=null;
+      // sblocco audio su mobile
+      audio.play().catch(()=>{}); audio.pause(); audio.currentTime=0;
+    };
+
+    let mirror=false;
+    async function startCam(){
+      video=document.createElement('video');
+      video.autoplay=true; video.playsInline=true;
+      const s=await navigator.mediaDevices.getUserMedia({
+        video:{facingMode:'environment',width:1280,height:720},audio:false
+      });
+      mirror = s.getVideoTracks()[0].getSettings().facingMode==='user';
+      video.srcObject=s;
+      video.onloadedmetadata=()=>{
+        canvas.width=video.videoWidth;
+        canvas.height=video.videoHeight;
+        requestAnimationFrame(loop);
+      };
+    }
+
+    function loop(){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      if(mirror){
+        ctx.save(); ctx.translate(canvas.width,0);
+        ctx.scale(-1,1); ctx.drawImage(video,0,0);
+        ctx.restore();
+      } else ctx.drawImage(video,0,0);
+      if(maskOn) track();
+      requestAnimationFrame(loop);
+    }
+
+    function track(){
+      const w=canvas.width,h=canvas.height,
+            img=ctx.getImageData(0,0,w,h),
+            mask=new Uint8Array(w*h);
+
+      // creazione maschera HSV
+      for(let i=0;i<img.data.length;i+=4){
+        const hsv=rgbToHsv(img.data[i],img.data[i+1],img.data[i+2]);
+        mask[i/4]=inRange(hsv,lower,upper)?1:0;
+      }
+      // apertura morfologica
+      const op=opening(mask,w,h,OPENR),
+            {labels,sizes}=labelCC(op,w,h);
+
+      // seleziona blob più grande
+      let bigL=0,bigSz=0;
+      for(const l in sizes) if(sizes[l]>bigSz){
+        bigSz=sizes[l]; bigL=+l;
+      }
+      if(initSize===null) initSize=bigSz;
+      const dynMin=Math.max(MIN_PIX, initSize*0.2);
+      if(bigSz<dynMin){
+        under++;
+        if(under>=MAXUNDER) resetAll();
+        return;
+      }
+      under=0;
+
+      // disegno solo blob
+      let sumX=0,sumY=0,cnt=0;
+      for(let i=0;i<labels.length;i++){
+        const i4=i*4;
+        if(labels[i]===bigL){
+          const x=i%w, y=(i/w)|0;
+          sumX+=x; sumY+=y; cnt++;
+        } else img.data[i4]=img.data[i4+1]=img.data[i4+2]=0;
+      }
+      ctx.putImageData(img,0,0);
+
+      // baricentro e cerchio
+      const cx=sumX/cnt, cy=sumY/cnt;
+      ctx.beginPath(); ctx.arc(cx,cy,10,0,2*Math.PI);
+      ctx.lineWidth=4; ctx.strokeStyle='#fff'; ctx.stroke();
+
+      // verifica fermo
+      history.push(cy);
+      if(history.length>15) history.shift();
+      checkStill();
+    }
+
+    function checkStill(){
+      const thresh = parseInt(sel.value,10)*1000;
+      const d = Math.max(...history)-Math.min(...history);
+      if(d<=MOVTOL){
+        if(!stillStart) stillStart=Date.now();
+        else if(Date.now()-stillStart>=thresh){
+          audio.play().catch(()=>{});
+          stillStart=null; history.length=0;
+        }
+      } else stillStart=null;
+    }
+
+    function resetAll(){
+      maskOn=false; hsvSel=null;
+      history=[]; stillStart=null;
+      under=0; initSize=null;
+      preview.style.background='#000';
+      btn.textContent='Avvia Video';
+    }
+
+    // --- helper ---
+    function opening(mask,w,h,r){
+      const tmp=new Uint8Array(mask), res=new Uint8Array(mask.length);
+      for(let y=r;y<h-r;y++)for(let x=r;x<w-r;x++){
+        const i=y*w+x; let ok=true;
+        for(let dy=-r;dy<=r&&ok;dy++)for(let dx=-r;dx<=r;dx++){
+          if(!mask[(y+dy)*w+(x+dx)]) ok=false;
+        }
+        tmp[i]=ok?1:0;
+      }
+      for(let y=r;y<h-r;y++)for(let x=r;x<w-r;x++){
+        const i=y*w+x; let ok=false;
+        for(let dy=-r;dy<=r&&!ok;dy++)for(let dx=-r;dx<=r;dx++){
+          if(tmp[(y+dy)*w+(x+dx)]) ok=true;
+        }
+        res[i]=ok?1:0;
+      }
+      return res;
+    }
+
+    function labelCC(mask,w,h){
+      const labels=new Int32Array(mask.length), sizes={}, q=[];
+      let lbl=0;
+      for(let i=0;i<mask.length;i++){
+        if(mask[i]&&labels[i]===0){
+          lbl++; sizes[lbl]=0; labels[i]=lbl; q.push(i);
+          while(q.length){
+            const v=q.pop(); sizes[lbl]++;
+            const x=v%w, y=(v/w)|0;
+            [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy])=>{
+              const nx=x+dx, ny=y+dy, ni=ny*w+nx;
+              if(nx>=0&&nx<w&&ny>=0&&ny<h&&mask[ni]&&labels[ni]===0){
+                labels[ni]=lbl; q.push(ni);
+              }
+            });
+          }
+        }
+      }
+      return {labels,sizes};
+    }
+
+    function rgbToHsv(r,g,b){
+      r/=255;g/=255;b/=255;
+      const M=Math.max(r,g,b), m=Math.min(r,g,b), d=M-m;
+      let h=0;
+      if(d){
+        if(M===r) h=((g-b)/d+(g<b?6:0));
+        else if(M===g) h=(b-r)/d+2;
+        else h=(r-g)/d+4;
+        h*=60;
+      }
+      return {h:Math.round(h),s:Math.round((M?d/M:0)*100),v:Math.round(M*100)};
+    }
+    function hsvToRgb(h,s,v){
+      s/=100; v/=100;
+      const c=v*s, x=c*(1-Math.abs((h/60)%2-1)), m=v-c;
+      let r=0,g=0,b=0;
+      if(h<60) [r,g,b]=[c,x,0];
+      else if(h<120) [r,g,b]=[x,c,0];
+      else if(h<180) [r,g,b]=[0,c,x];
+      else if(h<240) [r,g,b]=[0,x,c];
+      else if(h<300) [r,g,b]=[x,0,c];
+      else [r,g,b]=[c,0,x];
+      return {r:Math.round((r+m)*255),g:Math.round((g+m)*255),b:Math.round((b+m)*255)};
+    }
+    function inRange(h,lo,hi){
+      return h.h>=lo[0]&&h.h<=hi[0]
+          && h.s>=lo[1]&&h.s<=hi[1]
+          && h.v>=lo[2]&&h.v<=hi[2];
+    }
+    function clamp(v,mi,ma){ return v<mi?mi:v>ma?ma:v; }
+  })();
+  </script>
 </body>
 </html>
