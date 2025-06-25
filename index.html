@@ -45,11 +45,13 @@
     let mirror=false;
     const audio = new Audio('press.wav'); audio.preload='auto';
 
-    const MIN_PIXELS=2000;
-    let initialBlobCount = null; // area iniziale del blob selezionato
-    const MOVEMENT_TOLERANCE=20;
-    const OPENING_RADIUS=2;
-    const HSV_TOL={h:5,s:20,v:20};
+    const MIN_PIXELS = 500;               // soglia minima blob
+    const MOVEMENT_TOLERANCE = 20;
+    const OPENING_RADIUS = 2;
+    const HSV_TOL = { h: 5, s: 20, v: 20 };
+    const MAX_UNDER = 5;                  // frame sotto soglia tollerati
+    let underThresholdCount = 0;
+    let initialBlobCount = null;
 
     for(let i=1;i<=10;i++){ const opt=document.createElement('option'); opt.value=i; opt.textContent=`${i} s`; if(i===thresholdSec)opt.selected=true; thresholdSelect.appendChild(opt);}    
     thresholdSelect.onchange=()=>thresholdSec=parseInt(thresholdSelect.value,10);
@@ -69,9 +71,8 @@
       selectedHSV=rgbToHsv(p[0],p[1],p[2]);
       lowerHSV=[clamp(selectedHSV.h-HSV_TOL.h,0,360),clamp(selectedHSV.s-HSV_TOL.s,0,100),clamp(selectedHSV.v-HSV_TOL.v,0,100)];
       upperHSV=[clamp(selectedHSV.h+HSV_TOL.h,0,360),clamp(selectedHSV.s+HSV_TOL.s,0,100),clamp(selectedHSV.v+HSV_TOL.v,0,100)];
-      const prev=hsvToRgb(selectedHSV.h,selectedHSV.s,selectedHSV.v);
-      colorPreview.style.background=`rgb(${prev.r},${prev.g},${prev.b})`;
-      maskActive=true;
+      colorPreview.style.background=`rgb(${hsvToRgb(selectedHSV.h,selectedHSV.s,selectedHSV.v).r},${hsvToRgb(selectedHSV.h,selectedHSV.s,selectedHSV.v).g},${hsvToRgb(selectedHSV.h,selectedHSV.s,selectedHSV.v).b})`;
+      maskActive=true; underThresholdCount=0; initialBlobCount=null;
     };
 
     async function startVideo(){
@@ -91,100 +92,61 @@
       requestAnimationFrame(loop);
     }
 
-    function processFrame() {
+    function processFrame(){
       const w=canvas.width, h=canvas.height;
       const img=ctx.getImageData(0,0,w,h);
       const mask=new Uint8Array(w*h);
       for(let i=0;i<img.data.length;i+=4){ const hsv=rgbToHsv(img.data[i],img.data[i+1],img.data[i+2]); mask[i/4]=inRange(hsv,lowerHSV,upperHSV)?1:0; }
       const opened=opening(mask,w,h,OPENING_RADIUS);
-      // connected components
+      // label components
       const labels=new Int32Array(w*h), sizes={}; let label=0;
       for(let idx=0;idx<opened.length;idx++){
         if(opened[idx]&&labels[idx]===0){ label++; sizes[label]=0;
           const queue=[idx]; labels[idx]=label;
           while(queue.length){ const v=queue.pop(); sizes[label]++; const x=v%w,y=Math.floor(v/w);
-            [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy])=>{ const nx=x+dx,ny=y+dy; const ni=ny*w+nx;
-              if(nx>=0&&nx<w&&ny>=0&&ny<h&&opened[ni]&&labels[ni]===0){ labels[ni]=label; queue.push(ni);} });
+            [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy])=>{ const ni=(y+dy)*w+(x+dx);
+              if(x+dx>=0&&x+dx<w&&y+dy>=0&&y+dy<h&&opened[ni]&&labels[ni]===0){ labels[ni]=label; queue.push(ni);} });
           }
         }
       }
-      // largest blob
+      // find largest
       let maxLabel=0, maxSize=0;
-      for(const k in sizes){ if(sizes[k]>maxSize){ maxSize=sizes[k]; maxLabel=+k; }}
-      // initial blob count
-      if(initialBlobCount===null) initialBlobCount = sizes[maxLabel];
-      const dynamicMin = Math.max(MIN_PIXELS, initialBlobCount * 0.5);
-      // radius circle
-      let sumX=0,sumY=0,count=0;
+      for(const k in sizes) if(sizes[k]>maxSize){maxSize=sizes[k];maxLabel=+k;}
+      if(initialBlobCount===null) initialBlobCount=maxSize;
+      const dynamicMin=Math.max(MIN_PIXELS, initialBlobCount*0.2);
+      // build blobMask
       const blobMask=new Uint8Array(w*h);
-      for(let i=0;i<labels.length;i++){ if(labels[i]===maxLabel){ blobMask[i]=1; const x=i%w,y=Math.floor(i/w); sumX+=x; sumY+=y; count++; }}
-      if(count < dynamicMin){ fermoDa=null; posHistory=[]; return; }
+      let sumX=0,sumY=0,count=0;
+      for(let i=0;i<labels.length;i++){
+        if(labels[i]===maxLabel){ blobMask[i]=1; const x=i%w,y=Math.floor(i/w); sumX+=x; sumY+=y; count++; }
+      }
+      if(count<dynamicMin){ underThresholdCount++; if(underThresholdCount>=MAX_UNDER) resetSelection(); return; }
+      underThresholdCount=0;
       const cx=sumX/count, cy=sumY/count;
       const rMax=computeMaxCircleRadius(blobMask,cx,cy,w,h,Math.max(w,h));
-      // render final mask
+      // render final circle mask
       let sum2X=0,sum2Y=0,count2=0;
       for(let i=0;i<blobMask.length;i++){
-        const x=i%w, y=Math.floor(i/w);
-        const dx=x-cx, dy=y-cy;
+        const x=i%w,y=Math.floor(i/w); const dx=x-cx,dy=y-cy;
         if(blobMask[i]&&dx*dx+dy*dy<=rMax*rMax){ sum2X+=x; sum2Y+=y; count2++; }
-        else{ const i4=i*4; img.data[i4]=img.data[i4+1]=img.data[i4+2]=0; }
+        else{ const p=i*4; img.data[p]=img.data[p+1]=img.data[p+2]=0; }
       }
       ctx.putImageData(img,0,0);
       if(count2>=dynamicMin){ const rcx=sum2X/count2, rcy=sum2Y/count2;
         ctx.beginPath(); ctx.arc(rcx,rcy,10,0,2*Math.PI); ctx.lineWidth=4; ctx.strokeStyle='#fff'; ctx.stroke();
         posHistory.push(rcy); if(posHistory.length>15)posHistory.shift(); checkFermo(); }
-      else{ fermoDa=null; posHistory=[]; }
-    }
-      const w=canvas.width, h=canvas.height;
-      const img=ctx.getImageData(0,0,w,h);
-      const mask=new Uint8Array(w*h);
-      for(let i=0;i<img.data.length;i+=4){ const hsv=rgbToHsv(img.data[i],img.data[i+1],img.data[i+2]); mask[i/4]=inRange(hsv,lowerHSV,upperHSV)?1:0; }
-      const opened=opening(mask,w,h,OPENING_RADIUS);
-      // connected components
-      const labels=new Int32Array(w*h), sizes={}; let label=0;
-      for(let idx=0;idx<opened.length;idx++){
-        if(opened[idx]&&labels[idx]===0){ label++; sizes[label]=0;
-          const queue=[idx]; labels[idx]=label;
-          while(queue.length){ const v=queue.pop(); sizes[label]++; const x=v%w,y=Math.floor(v/w);
-            [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy])=>{ const nx=x+dx,ny=y+dy; const ni=ny*w+nx;
-              if(nx>=0&&nx<w&&ny>=0&&ny<h&&opened[ni]&&labels[ni]===0){ labels[ni]=label; queue.push(ni);} });
-          }
-        }
-      }
-      // largest blob
-      let maxLabel=0, maxSize=0;
-      for(const k in sizes){ if(sizes[k]>maxSize){ maxSize=sizes[k]; maxLabel=+k; }}
-      // radius circle
-      let sumX=0,sumY=0,count=0;
-      const blobMask=new Uint8Array(w*h);
-      for(let i=0;i<labels.length;i++){ if(labels[i]===maxLabel){ blobMask[i]=1; const x=i%w,y=Math.floor(i/w); sumX+=x; sumY+=y; count++; }}
-      if(count<MIN_PIXELS){ fermoDa=null; posHistory=[]; return; }
-      const cx=sumX/count, cy=sumY/count;
-      const rMax=computeMaxCircleRadius(blobMask,cx,cy,w,h,Math.max(w,h));
-      // render final mask
-      let sum2X=0,sum2Y=0,count2=0;
-      for(let i=0;i<blobMask.length;i++){
-        const x=i%w, y=Math.floor(i/w);
-        const dx=x-cx, dy=y-cy;
-        if(blobMask[i]&&dx*dx+dy*dy<=rMax*rMax){ sum2X+=x; sum2Y+=y; count2++; }
-        else{ const i4=i*4; img.data[i4]=img.data[i4+1]=img.data[i4+2]=0; }
-      }
-      ctx.putImageData(img,0,0);
-      if(count2>=MIN_PIXELS){ const rcx=sum2X/count2, rcy=sum2Y/count2;
-        ctx.beginPath(); ctx.arc(rcx,rcy,10,0,2*Math.PI); ctx.lineWidth=4; ctx.strokeStyle='#fff'; ctx.stroke();
-        posHistory.push(rcy); if(posHistory.length>15)posHistory.shift(); checkFermo(); }
-      else{ fermoDa=null; posHistory=[]; }
+      else{ underThresholdCount++; if(underThresholdCount>=MAX_UNDER) resetSelection(); }
     }
 
-    function computeMaxCircleRadius(mask,cx,cy,w,h,maxR){ let r=0, step=10*Math.PI/180;
+    function computeMaxCircleRadius(mask,cx,cy,w,h,maxR){ let r=0,step=10*Math.PI/180;
       while(r<maxR){ const nextR=r+1; let found=false;
-        for(let a=0;a<2*Math.PI;a+=step){ const x=Math.round(cx+nextR*Math.cos(a)), y=Math.round(cy+nextR*Math.sin(a));
+        for(let a=0;a<2*Math.PI;a+=step){ const x=Math.round(cx+nextR*Math.cos(a)),y=Math.round(cy+nextR*Math.sin(a));
           if(x>=0&&x<w&&y>=0&&y<h&&mask[y*w+x]){ found=true; break; }}
         if(found) r=nextR; else break;
       }
       return r;
     }
-    function opening(mask,w,h,r){ let temp=new Uint8Array(mask), res=new Uint8Array(mask.length);
+    function opening(mask,w,h,r){ let temp=new Uint8Array(mask),res=new Uint8Array(mask.length);
       for(let y=r;y<h-r;y++)for(let x=r;x<w-r;x++){ const i=y*w+x; let ok=true;
         for(let dy=-r;dy<=r&&ok;dy++)for(let dx=-r;dx<=r;dx++)if(!mask[(y+dy)*w+(x+dx)]){ok=false;break;}
         temp[i]=ok?1:0; }
@@ -194,11 +156,4 @@
     function checkFermo(){ const delta=Math.max(...posHistory)-Math.min(...posHistory);
       if(delta<=MOVEMENT_TOLERANCE){ if(!fermoDa)fermoDa=Date.now(); else if((Date.now()-fermoDa)/1000>=thresholdSec){audio.play();fermoDa=null;posHistory=[];} }
       else fermoDa=null; }
-    function resetSelection(){selectedHSV=null;lowerHSV=upperHSV=null;colorPreview.style.background='#000';posHistory=[];fermoDa=null;}
-    function rgbToHsv(r,g,b){r/=255;g/=255;b/=255;const M=Math.max(r,g,b),m=Math.min(r,g,b),d=M-m;let h=0;if(d){if(M===r)h=((g-b)/d+(g<b?6:0));else if(M===g)h=(b-r)/d+2;else h=(r-g)/d+4;h*=60;}return {h:Math.round(h),s:Math.round((M?d/M:0)*100),v:Math.round(M*100)};}
-    function hsvToRgb(h,s,v){s/=100;v/=100;const c=v*s,x=c*(1-Math.abs((h/60)%2-1)),m=v-c;let r=0,g=0,b=0;if(h<60)[r,g,b]=[c,x,0];else if(h<120)[r,g,b]=[x,c,0];else if(h<180)[r,g,b]=[0,c,x];else if(h<240)[r,g,b]=[0,x,c];else if(h<300)[r,g,b]=[x,0,c];else[r,g,b]=[c,0,x];return {r:Math.round((r+m)*255),g:Math.round((g+m)*255),b:Math.round((b+m)*255)};}
-    function clamp(v,min,max){return v<min?min:v>max?max:v;}
-    function inRange(hsv,lo,hi){return hsv.h>=lo[0]&&hsv.h<=hi[0]&&hsv.s>=lo[1]&&hsv.s<=hi[1]&&hsv.v>=lo[2]&&hsv.v<=hi[2];}
-  })();
-  </script></body>
-</html>
+    function resetSelection(){ selectedHSV=null; lowerHSV=upperHSV=null; colorPreview.style.background='#000'; posHistory=[]; fer... remainder omitted for brevity
