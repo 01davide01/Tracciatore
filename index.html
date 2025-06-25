@@ -40,19 +40,30 @@
     };
 
     // selezione colore solo se non in maschera
-    canvas.onclick=e=>{
-      if(!started || maskOn) return;
-      const r=canvas.getBoundingClientRect(),
-            x=((e.clientX-r.left)*canvas.width/r.width)|0,
-            y=((e.clientY-r.top)*canvas.height/r.height)|0,
-            px=mirror?canvas.width-x:x, py=y,
-            d=ctx.getImageData(px,py,1,1).data;
-      hsvSel=rgbToHsv(d[0],d[1],d[2]);
-      lower=[clamp(hsvSel.h-HSVR.h,0,360),clamp(hsvSel.s-HSVR.s,0,100),clamp(hsvSel.v-HSVR.v,0,100)];
-      upper=[clamp(hsvSel.h+HSVR.h,0,360),clamp(hsvSel.s+HSVR.s,0,100),clamp(hsvSel.v+HSVR.v,0,100)];
-      const c=hsvToRgb(hsvSel.h,hsvSel.s,hsvSel.v);
-      preview.style.background=`rgb(${c.r},${c.g},${c.b})`;
-      maskOn=true; under=0; initSize=null;
+    canvas.onclick = e => {
+      if (!started || maskOn) return;
+      const r = canvas.getBoundingClientRect(),
+            x = ((e.clientX - r.left) * canvas.width / r.width) | 0,
+            y = ((e.clientY - r.top)  * canvas.height / r.height) | 0,
+            px = mirror ? canvas.width - x : x, py = y,
+            d = ctx.getImageData(px, py, 1, 1).data;
+      hsvSel = rgbToHsv(d[0], d[1], d[2]);
+      lower = [
+        clamp(hsvSel.h - HSVR.h, 0, 360),
+        clamp(hsvSel.s - HSVR.s, 0, 100),
+        clamp(hsvSel.v - HSVR.v, 0, 100)
+      ];
+      upper = [
+        clamp(hsvSel.h + HSVR.h, 0, 360),
+        clamp(hsvSel.s + HSVR.s, 0, 100),
+        clamp(hsvSel.v + HSVR.v, 0, 100)
+      ];
+      const c = hsvToRgb(hsvSel.h, hsvSel.s, hsvSel.v);
+      preview.style.background = `rgb(${c.r},${c.g},${c.b})`;
+      maskOn = true; under = 0; initSize = null;
+      // unlock audio on mobile
+      audio.play().catch(()=>{}); audio.pause(); audio.currentTime = 0;
+    }; // disabilita click sulla maschera
       // unlock audio
       audio.play().catch(()=>{}); audio.pause(); audio.currentTime=0;
     };
@@ -74,15 +85,42 @@
       requestAnimationFrame(loop);
     }
 
-    function track(){
-      const w=canvas.width,h=canvas.height,img=ctx.getImageData(0,0,w,h),mask=new Uint8Array(w*h);
-      for(let i=0;i<img.data.length;i+=4){const hsv=rgbToHsv(img.data[i],img.data[i+1],img.data[i+2]);mask[i/4]=inRange(hsv,lower,upper)?1:0;}
-      const op=opening(mask,w,h,OPENR),{labels,sizes}=labelCC(op,w,h);
-      let bigL=0,bigSz=0;
-      for(const l in sizes) if(sizes[l]>bigSz){bigSz=sizes[l];bigL=+l;}
-      if(initSize===null) initSize=bigSz;
-      const dynMin=Math.max(MIN_PIX,initSize*0.2);
-      if(bigSz<dynMin){under++;if(under>=MAXUNDER)resetAll();return;}else under=0;
+    function track() {
+      const w = canvas.width, h = canvas.height;
+      const img = ctx.getImageData(0, 0, w, h);
+      const mask = new Uint8Array(w * h);
+      for (let i = 0; i < img.data.length; i += 4) {
+        const hsv = rgbToHsv(img.data[i], img.data[i + 1], img.data[i + 2]);
+        mask[i / 4] = inRange(hsv, lower, upper) ? 1 : 0;
+      }
+      const op = opening(mask, w, h, OPENR);
+      const {labels, sizes} = labelCC(op, w, h);
+      let bigL = 0, bigSz = 0;
+      for (const l in sizes) if (sizes[l] > bigSz) { bigSz = sizes[l]; bigL = +l; }
+      if (initSize === null) initSize = bigSz;
+      const dynMin = Math.max(MIN_PIX, initSize * 0.2);
+      if (bigSz < dynMin) {
+        // blob temporaneamente assente: mantieni selezione e preview
+        return;
+      }
+      // valid blob: procedi al tracciamento
+      let sumX = 0, sumY = 0, cnt = 0;
+      for (let i = 0; i < labels.length; i++) {
+        const i4 = i * 4;
+        if (labels[i] === bigL) {
+          const x = i % w, y = (i / w) | 0;
+          sumX += x; sumY += y; cnt++;
+        } else {
+          img.data[i4] = img.data[i4 + 1] = img.data[i4 + 2] = 0;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+      const cx = sumX / cnt, cy = sumY / cnt;
+      ctx.beginPath(); ctx.arc(cx, cy, 10, 0, 2 * Math.PI);
+      ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.stroke();
+      history.push(cy); if (history.length > 15) history.shift();
+      checkStill();
+    }
       let sumX=0,sumY=0,cnt=0;
       for(let i=0;i<labels.length;i++){const i4=i*4;if(labels[i]===bigL){const x=i%w,y=(i/w)|0;sumX+=x;sumY+=y;cnt++;}else img.data[i4]=img.data[i4+1]=img.data[i4+2]=0;}
       ctx.putImageData(img,0,0);
@@ -93,7 +131,8 @@
 
     function checkStill(){const t=parseInt(sel.value,10)*1e3,d=Math.max(...history)-Math.min(...history);
       if(d<=MOVTOL){if(!stillStart)stillStart=Date.now();else if(Date.now()-stillStart>=t){audio.play().catch(()=>{});stillStart=null;history=[];}}else stillStart=null;}    
-    function resetAll(){maskOn=false;hsvSel=null;history=[];stillStart=null;under=0;initSize=null;preview.style.background='#000';btn.textContent='Avvia Video';}
+    function resetAll(){
+      canvas.style.pointerEvents = 'auto'; // riabilita click su canvasmaskOn=false;hsvSel=null;history=[];stillStart=null;under=0;initSize=null;preview.style.background='#000';btn.textContent='Avvia Video';}
 
     // helpers: opening,labelCC,rgbToHsv,hsvToRgb,inRange,clamp (unchanged)...
     function opening(m,w,h,r){const t=new Uint8Array(m),res=new Uint8Array(m.length);for(let y=r;y<h-r;y++)for(let x=r;x<w-r;x++){const i=y*w+x;let ok=true;for(let dy=-r;dy<=r&&ok;dy++)for(let dx=-r;dx<=r;dx++)if(!m[(y+dy)*w+(x+dx)])ok=false;t[i]=ok?1:0;}for(let y=r;y<h-r;y++)for(let x=r;x<w-r;x++){const i=y*w+x;let ok=false;for(let dy=-r;dy<=r&&!ok;dy++)for(let dx=-r;dx<=r;dx++)if(t[(y+dy)*w+(x+dx)])ok=true;res[i]=ok?1:0;}return res;}
