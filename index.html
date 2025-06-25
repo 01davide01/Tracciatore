@@ -46,9 +46,9 @@
     let mirror = false;
     const audio = new Audio('press.wav'); audio.preload = 'auto';
 
-    const MIN_PIXELS = 1000;
+    const MIN_PIXELS = 2000;              // soglia aumentata per ignorare piccoli gruppi
     const MOVEMENT_TOLERANCE = 20;
-    const OPENING_RADIUS = 1;
+    const OPENING_RADIUS = 2;              // raggio di apertura aumentato per ridurre rumore
     const HSV_TOL = { h: 10, s: 25, v: 25 };
 
     for (let i = 1; i <= 10; i++) {
@@ -126,10 +126,7 @@
       for (let idx=0;idx<opened.length;idx++) {
         const i4=idx*4;
         if (!opened[idx]) img.data[i4]=img.data[i4+1]=img.data[i4+2]=0;
-        else {
-          const x=idx%width, y=Math.floor(idx/width);
-          sumX+=x; sumY+=y; count++;
-        }
+        else { const x=idx%width, y=Math.floor(idx/width); sumX+=x; sumY+=y; count++; }
       }
       ctx.putImageData(img,0,0);
       if (count>=MIN_PIXELS) {
@@ -145,16 +142,12 @@
       let temp=new Uint8Array(mask), result=new Uint8Array(mask.length);
       for (let y=r;y<h-r;y++) for (let x=r;x<w-r;x++) {
         const idx=y*w+x; let ok=true;
-        for (let dy=-r;dy<=r;dy++) for (let dx=-r;dx<=r;dx++) {
-          if (!mask[(y+dy)*w+(x+dx)]) { ok=false; break; }
-        }
+        for (let dy=-r;dy<=r;dy++) for (let dx=-r;dx<=r;dx++) if (!mask[(y+dy)*w+(x+dx)]) { ok=false; break; }
         temp[idx]=ok?1:0;
       }
       for (let y=r;y<h-r;y++) for (let x=r;x<w-r;x++) {
         const idx=y*w+x; let ok=false;
-        for (let dy=-r;dy<=r;dy++) for (let dx=-r;dx<=r;dx++) {
-          if (temp[(y+dy)*w+(x+dx)]) { ok=true; break; }
-        }
+        for (let dy=-r;dy<=r;dy++) for (let dx=-r;dx<=r;dx++) if (temp[(y+dy)*w+(x+dx)]) { ok=true; break; }
         result[idx]=ok?1:0;
       }
       return result;
@@ -170,16 +163,8 @@
 
     function resetSelection() { selectedHSV=null; lowerHSV=upperHSV=null; colorPreview.style.background='#000'; posHistory=[]; fermoDa=null; }
 
-    function rgbToHsv(r,g,b) { r/=255;g/=255;b/=255; const M=Math.max(r,g,b), m=Math.min(r,g,b), d=M-m; let h=0;
-      if(d){ if(M===r)h=((g-b)/d+(g<b?6:0)); else if(M===g)h=(b-r)/d+2; else h=(r-g)/d+4; h*=60; }
-      return {h:Math.round(h),s:Math.round((M?d/M:0)*100),v:Math.round(M*100)};
-    }
-
-    function hsvToRgb(h,s,v){ s/=100;v/=100; const c=v*s, x=c*(1-Math.abs((h/60)%2-1)), m=v-c; let r=0,g=0,b=0;
-      if(h<60)[r,g,b]=[c,x,0]; else if(h<120)[r,g,b]=[x,c,0]; else if(h<180)[r,g,b]=[0,c,x];
-      else if(h<240)[r,g,b]=[0,x,c]; else if(h<300)[r,g,b]=[x,0,c]; else[r,g,b]=[c,0,x];
-      return {r:Math.round((r+m)*255),g:Math.round((g+m)*255),b:Math.round((b+m)*255)};
-    }
+    function rgbToHsv(r,g,b) { r/=255;g/=255;b/=255; const M=Math.max(r,g,b), m=Math.min(r,g,b), d=M-m; let h=0; if(d){ if(M===r)h=((g-b)/d+(g<b?6:0)); else if(M===g)h=(b-r)/d+2; else h=(r-g)/d+4; h*=60; } return {h:Math.round(h),s:Math.round((M?d/M:0)*100),v:Math.round(M*100)}; }
+    function hsvToRgb(h,s,v){ s/=100;v/=100; const c=v*s, x=c*(1-Math.abs((h/60)%2-1)), m=v-c; let r=0,g=0,b=0; if(h<60)[r,g,b]=[c,x,0]; else if(h<120)[r,g,b]=[x,c,0]; else if(h<180)[r,g,b]=[0,c,x]; else if(h<240)[r,g,b]=[0,x,c]; else if(h<300)[r,g,b]=[x,0,c]; else[r,g,b]=[c,0,x]; return {r:Math.round((r+m)*255),g:Math.round((g+m)*255),b:Math.round((b+m)*255)}; }
     function clamp(v,min,max){return v<min?min:v>max?max:v;}
     function inRange(hsv, lo, hi){return hsv.h>=lo[0]&&hsv.h<=hi[0]&&hsv.s>=lo[1]&&hsv.s<=hi[1]&&hsv.v>=lo[2]&&hsv.v<=hi[2];}
   })();
