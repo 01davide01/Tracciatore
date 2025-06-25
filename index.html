@@ -46,6 +46,7 @@
     const audio = new Audio('press.wav'); audio.preload='auto';
 
     const MIN_PIXELS=2000;
+    let initialBlobCount = null; // area iniziale del blob selezionato
     const MOVEMENT_TOLERANCE=20;
     const OPENING_RADIUS=2;
     const HSV_TOL={h:5,s:20,v:20};
@@ -90,7 +91,50 @@
       requestAnimationFrame(loop);
     }
 
-    function processFrame(){
+    function processFrame() {
+      const w=canvas.width, h=canvas.height;
+      const img=ctx.getImageData(0,0,w,h);
+      const mask=new Uint8Array(w*h);
+      for(let i=0;i<img.data.length;i+=4){ const hsv=rgbToHsv(img.data[i],img.data[i+1],img.data[i+2]); mask[i/4]=inRange(hsv,lowerHSV,upperHSV)?1:0; }
+      const opened=opening(mask,w,h,OPENING_RADIUS);
+      // connected components
+      const labels=new Int32Array(w*h), sizes={}; let label=0;
+      for(let idx=0;idx<opened.length;idx++){
+        if(opened[idx]&&labels[idx]===0){ label++; sizes[label]=0;
+          const queue=[idx]; labels[idx]=label;
+          while(queue.length){ const v=queue.pop(); sizes[label]++; const x=v%w,y=Math.floor(v/w);
+            [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy])=>{ const nx=x+dx,ny=y+dy; const ni=ny*w+nx;
+              if(nx>=0&&nx<w&&ny>=0&&ny<h&&opened[ni]&&labels[ni]===0){ labels[ni]=label; queue.push(ni);} });
+          }
+        }
+      }
+      // largest blob
+      let maxLabel=0, maxSize=0;
+      for(const k in sizes){ if(sizes[k]>maxSize){ maxSize=sizes[k]; maxLabel=+k; }}
+      // initial blob count
+      if(initialBlobCount===null) initialBlobCount = sizes[maxLabel];
+      const dynamicMin = Math.max(MIN_PIXELS, initialBlobCount * 0.5);
+      // radius circle
+      let sumX=0,sumY=0,count=0;
+      const blobMask=new Uint8Array(w*h);
+      for(let i=0;i<labels.length;i++){ if(labels[i]===maxLabel){ blobMask[i]=1; const x=i%w,y=Math.floor(i/w); sumX+=x; sumY+=y; count++; }}
+      if(count < dynamicMin){ fermoDa=null; posHistory=[]; return; }
+      const cx=sumX/count, cy=sumY/count;
+      const rMax=computeMaxCircleRadius(blobMask,cx,cy,w,h,Math.max(w,h));
+      // render final mask
+      let sum2X=0,sum2Y=0,count2=0;
+      for(let i=0;i<blobMask.length;i++){
+        const x=i%w, y=Math.floor(i/w);
+        const dx=x-cx, dy=y-cy;
+        if(blobMask[i]&&dx*dx+dy*dy<=rMax*rMax){ sum2X+=x; sum2Y+=y; count2++; }
+        else{ const i4=i*4; img.data[i4]=img.data[i4+1]=img.data[i4+2]=0; }
+      }
+      ctx.putImageData(img,0,0);
+      if(count2>=dynamicMin){ const rcx=sum2X/count2, rcy=sum2Y/count2;
+        ctx.beginPath(); ctx.arc(rcx,rcy,10,0,2*Math.PI); ctx.lineWidth=4; ctx.strokeStyle='#fff'; ctx.stroke();
+        posHistory.push(rcy); if(posHistory.length>15)posHistory.shift(); checkFermo(); }
+      else{ fermoDa=null; posHistory=[]; }
+    }
       const w=canvas.width, h=canvas.height;
       const img=ctx.getImageData(0,0,w,h);
       const mask=new Uint8Array(w*h);
