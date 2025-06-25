@@ -49,32 +49,39 @@
     let mirror = false;
     const audio = new Audio('press.wav'); audio.preload = 'auto';
 
+    // Parametri di base
     const MIN_PIXELS = 1000;
     const MOVEMENT_TOLERANCE = 20;
-    const OPENING_RADIUS = 1;
-    const HSV_TOL = { h: 10, s: 25, v: 25 };
+    const HSV_TOL = {h:5, s:20, v:20};
 
+    // Popola dropdown secondi
     for (let i = 1; i <= 10; i++) {
       const opt = document.createElement('option');
-      opt.value = i; opt.textContent = `${i} s`;
+      opt.value = i;
+      opt.textContent = `${i} s`;
       if (i === thresholdSec) opt.selected = true;
       thresholdSelect.appendChild(opt);
     }
-    thresholdSelect.addEventListener('change', () => thresholdSec = parseInt(thresholdSelect.value, 10));
+    thresholdSelect.onchange = () => thresholdSec = parseInt(thresholdSelect.value, 10);
 
-    startBtn.addEventListener('click', async () => {
-      if (!videoStarted) { await startVideo(); videoStarted = true; }
-      else if (selectedHSV !== null) { maskActive = !maskActive; if (!maskActive) resetSelection(); }
-    });
+    startBtn.onclick = async () => {
+      if (!videoStarted) {
+        await startVideo();
+        videoStarted = true;
+      } else if (selectedHSV !== null) {
+        maskActive = !maskActive;
+        if (!maskActive) resetSelection();
+      }
+    };
 
-    canvas.addEventListener('click', e => {
+    canvas.onclick = (e) => {
       if (!videoStarted || maskActive) return;
       const rect = canvas.getBoundingClientRect();
-      const rawX = (e.clientX - rect.left) * (canvas.width / rect.width);
-      const rawY = (e.clientY - rect.top) * (canvas.height / rect.height);
-      const pickX = mirror ? canvas.width - rawX : rawX;
-      const pickY = rawY;
-      const p = ctx.getImageData(Math.round(pickX), Math.round(pickY), 1, 1).data;
+      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+      const pickX = mirror ? canvas.width - x : x;
+      const pickY = y;
+      const p = ctx.getImageData(pickX|0, pickY|0, 1, 1).data;
       selectedHSV = rgbToHsv(p[0], p[1], p[2]);
       lowerHSV = [
         clamp(selectedHSV.h - HSV_TOL.h, 0, 360),
@@ -89,102 +96,122 @@
       const prev = hsvToRgb(selectedHSV.h, selectedHSV.s, selectedHSV.v);
       colorPreview.style.background = `rgb(${prev.r},${prev.g},${prev.b})`;
       maskActive = true;
-    });
+    };
 
     async function startVideo() {
-      video = document.createElement('video'); video.autoplay = true; video.playsInline = true;
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false
-        });
-        const track = stream.getVideoTracks()[0];
-        mirror = track.getSettings().facingMode === 'user';
-        video.srcObject = stream;
-        video.addEventListener('loadedmetadata', () => {
-          canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-          requestAnimationFrame(loop);
-        });
-      } catch (e) { alert('Impossibile accedere alla videocamera.'); }
+      video = document.createElement('video');
+      video.autoplay = true;
+      video.playsInline = true;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: 1280, height: 720 },
+        audio: false
+      });
+      mirror = stream.getVideoTracks()[0].getSettings().facingMode === 'user';
+      video.srcObject = stream;
+      video.onloadedmetadata = () => {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        requestAnimationFrame(loop);
+      };
     }
 
     function loop() {
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      if (mirror) { ctx.save(); ctx.translate(canvas.width,0); ctx.scale(-1,1); ctx.drawImage(video,0,0); ctx.restore(); }
-      else ctx.drawImage(video,0,0);
+      if (mirror) {
+        ctx.save();
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, 0, 0);
+        ctx.restore();
+      } else {
+        ctx.drawImage(video, 0, 0);
+      }
       if (maskActive) processFrame();
       requestAnimationFrame(loop);
     }
 
     function processFrame() {
-      const width = canvas.width, height = canvas.height;
-      const img = ctx.getImageData(0,0,width,height);
-      const mask = new Uint8Array(width*height);
-      for (let i=0;i<img.data.length;i+=4) {
-        const idx=i/4;
-        const hsv = rgbToHsv(img.data[i],img.data[i+1],img.data[i+2]);
-        mask[idx] = inRange(hsv,lowerHSV,upperHSV)?1:0;
+      const w = canvas.width, h = canvas.height;
+      const img = ctx.getImageData(0, 0, w, h);
+      // crea la maschera HSV
+      const mask = new Uint8Array(w*h);
+      for (let i = 0; i < img.data.length; i += 4) {
+        const hsv = rgbToHsv(img.data[i], img.data[i+1], img.data[i+2]);
+        mask[i/4] = inRange(hsv, lowerHSV, upperHSV) ? 1 : 0;
       }
-      const opened = opening(mask,width,height,OPENING_RADIUS);
-      let sumX=0,sumY=0,count=0;
-      for (let idx=0;idx<opened.length;idx++) {
-        const i4=idx*4;
-        if (!opened[idx]) img.data[i4]=img.data[i4+1]=img.data[i4+2]=0;
-        else {
-          const x=idx%width, y=Math.floor(idx/width);
+      // connected components (blob più grande)
+      const labels = new Int32Array(w*h), sizes = {}, queue = [];
+      let lbl = 0;
+      for (let idx = 0; idx < mask.length; idx++) {
+        if (mask[idx] && labels[idx] === 0) {
+          lbl++; sizes[lbl] = 0;
+          labels[idx] = lbl;
+          queue.push(idx);
+          while (queue.length) {
+            const v = queue.pop();
+            sizes[lbl]++;
+            const x = v % w, y = Math.floor(v / w);
+            [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy]) => {
+              const nx = x+dx, ny = y+dy, ni = ny*w+nx;
+              if (nx>=0&&nx<w&&ny>=0&&ny<h&&mask[ni]&&labels[ni]===0) {
+                labels[ni] = lbl;
+                queue.push(ni);
+              }
+            });
+          }
+        }
+      }
+      // trova il blob più grande
+      let maxLabel = 0, maxSize = 0;
+      for (const k in sizes) {
+        if (sizes[k] > maxSize) { maxSize = sizes[k]; maxLabel = +k; }
+      }
+      // disegna solo il blob più grande
+      let sumX=0, sumY=0, count=0;
+      for (let i = 0; i < labels.length; i++) {
+        const i4 = i*4;
+        if (labels[i] === maxLabel) {
+          const x = i % w, y = Math.floor(i / w);
           sumX+=x; sumY+=y; count++;
+        } else {
+          img.data[i4] = img.data[i4+1] = img.data[i4+2] = 0;
         }
       }
-      ctx.putImageData(img,0,0);
-      if (count>=MIN_PIXELS) {
-        const cx=sumX/count, cy=sumY/count;
-        ctx.beginPath(); ctx.arc(cx,cy,10,0,2*Math.PI);
-        ctx.lineWidth=4; ctx.strokeStyle='#fff'; ctx.stroke();
-        posHistory.push(cy); if(posHistory.length>15) posHistory.shift();
-        checkFermo(count,posHistory);
-      } else { fermoDa=null; posHistory=[]; }
-    }
-
-    function opening(mask,w,h,r) {
-      let temp=new Uint8Array(mask), result=new Uint8Array(mask.length);
-      for (let y=r;y<h-r;y++) for (let x=r;x<w-r;x++) {
-        const idx=y*w+x; let ok=true;
-        for (let dy=-r;dy<=r;dy++) for (let dx=-r;dx<=r;dx++) {
-          if (!mask[(y+dy)*w+(x+dx)]) { ok=false; break; }
-        }
-        temp[idx]=ok?1:0;
+      ctx.putImageData(img, 0, 0);
+      if (count >= MIN_PIXELS) {
+        const cx = sumX/count, cy = sumY/count;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 10, 0, 2*Math.PI);
+        ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.stroke();
+        // check fermo...
       }
-      for (let y=r;y<h-r;y++) for (let x=r;x<w-r;x++) {
-        const idx=y*w+x; let ok=false;
-        for (let dy=-r;dy<=r;dy++) for (let dx=-r;dx<=r;dx++) {
-          if (temp[(y+dy)*w+(x+dx)]) { ok=true; break; }
-        }
-        result[idx]=ok?1:0;
+    }
+
+    // utility e stato
+    function resetSelection() {
+      maskActive = false;
+      selectedHSV = lowerHSV = upperHSV = null;
+      posHistory = []; fermoDa = null;
+      colorPreview.style.background = '#000';
+    }
+    function rgbToHsv(r,g,b) {
+      r/=255;g/=255;b/=255;
+      const M=Math.max(r,g,b), m=Math.min(r,g,b), d=M-m;
+      let h=0;
+      if (d) {
+        if (M===r) h = ((g-b)/d + (g<b?6:0));
+        else if (M===g) h = (b-r)/d + 2;
+        else h = (r-g)/d + 4;
+        h *= 60;
       }
-      return result;
+      const s= M? d/M:0, v=M;
+      return {h:Math.round(h),s:Math.round(s*100),v:Math.round(v*100)};
     }
-
-    function checkFermo(count, history) {
-      const delta=Math.max(...history)-Math.min(...history);
-      if (delta<=MOVEMENT_TOLERANCE) {
-        if (!fermoDa) fermoDa=Date.now();
-        else if ((Date.now()-fermoDa)/1000>=thresholdSec) { audio.play(); fermoDa=null; posHistory=[]; }
-      } else fermoDa=null;
+    function inRange(hsv, lo, hi) {
+      return hsv.h>=lo[0]&&hsv.h<=hi[0]
+          && hsv.s>=lo[1]&&hsv.s<=hi[1]
+          && hsv.v>=lo[2]&&hsv.v<=hi[2];
     }
-
-    function resetSelection() { selectedHSV=null; lowerHSV=upperHSV=null; colorPreview.style.background='#000'; posHistory=[]; fermoDa=null; }
-
-    function rgbToHsv(r,g,b) { r/=255;g/=255;b/=255; const M=Math.max(r,g,b), m=Math.min(r,g,b), d=M-m; let h=0;
-      if(d){ if(M===r)h=((g-b)/d+(g<b?6:0)); else if(M===g)h=(b-r)/d+2; else h=(r-g)/d+4; h*=60; }
-      return {h:Math.round(h),s:Math.round((M?d/M:0)*100),v:Math.round(M*100)};
-    }
-
-    function hsvToRgb(h,s,v){ s/=100;v/=100; const c=v*s, x=c*(1-Math.abs((h/60)%2-1)), m=v-c; let r=0,g=0,b=0;
-      if(h<60)[r,g,b]=[c,x,0]; else if(h<120)[r,g,b]=[x,c,0]; else if(h<180)[r,g,b]=[0,c,x];
-      else if(h<240)[r,g,b]=[0,x,c]; else if(h<300)[r,g,b]=[x,0,c]; else[r,g,b]=[c,0,x];
-      return {r:Math.round((r+m)*255),g:Math.round((g+m)*255),b:Math.round((b+m)*255)};
-    }
-    function clamp(v,min,max){return v<min?min:v>max?max:v;}
-    function inRange(hsv, lo, hi){return hsv.h>=lo[0]&&hsv.h<=hi[0]&&hsv.s>=lo[1]&&hsv.s<=hi[1]&&hsv.v>=lo[2]&&hsv.v<=hi[2];}
+    function clamp(v,min,max){ return v<min?min:v>max?max:v; }
   })();
   </script>
 </body>
