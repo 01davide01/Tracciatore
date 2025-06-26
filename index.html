@@ -128,7 +128,7 @@
       preview.style.background = `rgb(${c.r},${c.g},${c.b})`;
       maskOn = true;
       // Disabilita di nuovo il canvas
-      canvas.classList.remove('active');
+      canvas.classList.add('active');
       audio.play().catch(()=>{});
       audio.pause(); audio.currentTime = 0;
     };
