@@ -113,49 +113,7 @@
       requestAnimationFrame(loop);
     }
 
-    function applyMask(){
-      const w = canvas.width, h = canvas.height;
-      const frame = ctx.getImageData(0,0,w,h);
-      const mask = new Uint8Array(w*h);
-      // Costruisci mask full-scan
-      for(let i=0, p=0; i<w*h; i++, p+=4){
-        const hsv = rgbToHsv(frame.data[p], frame.data[p+1], frame.data[p+2]);
-        mask[i] = inRange(hsv, lower, upper) ? 1 : 0;
-      }
-      // Connected components
-      const {labels, sizes} = labelCC(mask, w, h);
-      let bigL=0, bigSz=0;
-      for(const l in sizes) if(sizes[l] > bigSz){ bigSz = sizes[l]; bigL = +l; }
-      // Base: nero o ultima maschera
-      if(bigSz === 0){
-        if(lastMaskData) ctx.putImageData(lastMaskData, 0, 0);
-        else ctx.fillRect(0,0,w,h);
-        return;
-      }
-      // Disegna la maschera nera
-      ctx.fillStyle = 'black'; ctx.fillRect(0,0,w,h);
-      // Disegna solo blob più grande
-      let sumX=0, sumY=0, cnt=0;
-      for(let i=0, p=0; i<w*h; i++, p+=4){
-        if(labels[i] === bigL){
-          const x = i % w, y = (i / w) | 0;
-          sumX += x; sumY += y; cnt++;
-          ctx.fillStyle = `rgb(${frame.data[p]},${frame.data[p+1]},${frame.data[p+2]})`;
-          ctx.fillRect(x, y, 1, 1);
-        }
-      }
-      // Cerchio e comando ritardato
-      if(cnt > 0){
-        const cx = sumX / cnt, cy = sumY / cnt;
-        ctx.beginPath(); ctx.arc(cx, cy, 10, 0, 2*Math.PI);
-        ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.stroke();
-        history.push(cy); if(history.length > 15) history.shift(); checkStill();
-        // Salva ultimo stato
-        lastMaskData = ctx.getImageData(0,0,w,h);
-      }
-    }
-
-    function checkStill(){
+    (){
       const t = parseInt(sel.value,10) * 1000;
       const d = Math.max(...history) - Math.min(...history);
       if(d <= MOV_TOL){
