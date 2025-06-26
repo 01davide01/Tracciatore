@@ -71,6 +71,7 @@
     };
 
     let mirror = false;
+    let lastMaskData = null;  // salviamo l'ultima maschera valida
     async function startCam(){
       video = document.createElement('video'); video.autoplay = true; video.playsInline = true;
       const s = await navigator.mediaDevices.getUserMedia({ video:{facingMode:'environment', width:1280, height:720}, audio:false });
