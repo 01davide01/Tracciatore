@@ -119,11 +119,21 @@ function applyMaskFull(){
 }
 
 function checkStill(){
-  const t=parseInt(sel.value,10)*1000;
-  const d=Math.max(...history)-Math.min(...history);
-  if(d<=MOV_TOL){
-    if(!stillStart)stillStart=Date.now();
-    else if(Date.now()-stillStart>=t){audio.play().catch(()=>{});stillStart=null;history=[];}
+  const t = parseInt(sel.value,10) * 1000;
+  const d = Math.max(...history) - Math.min(...history);
+  if(d <= MOV_TOL){
+    if(!stillStart) stillStart = Date.now();
+    else if(Date.now() - stillStart >= t){
+      audio.play().catch(()=>{});
+      stillStart = null;
+      history = [];
+    }
+  } else {
+    // Movimento rilevato: reset temporaneo per eliminare ritardo
+    stillStart = null;
+    history = [];
+  }
+});stillStart=null;history=[];}
   } else stillStart=null;
 }
 
